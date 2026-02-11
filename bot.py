@@ -11,52 +11,74 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-DATA_FILE = "scores.json"
+DATA_FILE = "leaderboard.json"
 
-def load_scores():
+def load_entries():
     if not os.path.exists(DATA_FILE):
-        return {}
+        return []
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
-def save_scores(data):
+def save_entries(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-scores = load_scores()
-leaderboard_message_id = None
+entries = load_entries()
 
-@tree.command(name="score", description="Add or update a player's score")
-async def score(interaction: discord.Interaction, name: str, points: int):
-    global scores
-    scores[name] = points
-    save_scores(scores)
+@tree.command(name="addentry", description="Add a leaderboard entry with points and images")
+async def addentry(interaction: discord.Interaction, points: int):
+    global entries
 
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    # Get attached images
+    attachments = interaction.attachments
+    image_urls = [att.url for att in attachments]
 
-    leaderboard_text = "🏆 **Leaderboard** 🏆\n\n"
+    if not image_urls:
+        await interaction.response.send_message(
+            "You must attach at least one image.",
+            ephemeral=True
+        )
+        return
 
-    medals = ["🥇", "🥈", "🥉"]
+    # Add new entry
+    new_entry = {
+        "points": points,
+        "images": image_urls
+    }
 
-    for index, (player, pts) in enumerate(sorted_scores):
-        medal = medals[index] if index < 3 else f"{index+1}."
-        leaderboard_text += f"{medal} {player} — {pts}\n"
+    entries.append(new_entry)
 
-    await interaction.response.send_message("Leaderboard updated!", ephemeral=True)
+    # Sort descending by points
+    entries.sort(key=lambda x: x["points"], reverse=True)
+
+    save_entries(entries)
+
+    await interaction.response.send_message(
+        "Entry added! Rebuilding leaderboard...",
+        ephemeral=True
+    )
 
     channel = interaction.channel
 
-    global leaderboard_message_id
-    if leaderboard_message_id:
-        try:
-            msg = await channel.fetch_message(leaderboard_message_id)
-            await msg.edit(content=leaderboard_text)
-            return
-        except:
-            pass
+    # Delete all messages in channel (limit 200 for safety)
+    async for msg in channel.history(limit=200):
+        await msg.delete()
 
-    msg = await channel.send(leaderboard_text)
-    leaderboard_message_id = msg.id
+    medals = ["🥇", "🥈", "🥉"]
+
+    # Repost sorted leaderboard
+    for index, entry in enumerate(entries):
+        medal = medals[index] if index < 3 else f"{index+1}."
+
+        await channel.send(
+            content=f"{medal} - {entry['points']}️⃣"
+        )
+
+        # Send images in batches of 10 (Discord limit)
+        for i in range(0, len(entry["images"]), 10):
+            batch = entry["images"][i:i+10]
+            await channel.send("\n".join(batch))
+
 
 @client.event
 async def on_ready():
@@ -64,3 +86,4 @@ async def on_ready():
     print(f"Logged in as {client.user}")
 
 client.run(TOKEN)
+
